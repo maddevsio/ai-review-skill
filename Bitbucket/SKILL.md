@@ -8,7 +8,7 @@ allowed-tools:
   - Bash(cat /tmp/pr-diff-*)
   - Bash(grep * /tmp/pr-diff-*)
   - Bash(sed -n * /tmp/pr-diff-*)
-  - Bash(rm /tmp/pr-diff-* /tmp/pr-diff-raw-* /tmp/pr-comments-*)
+  - Bash(rm /tmp/pr-diff-* /tmp/pr-diff-raw-* /tmp/pr-comments-* /tmp/pr-summary-*)
   - Bash(ls *)
   - Bash(echo *)
   - Read(*)
@@ -44,6 +44,9 @@ Do not proceed until credentials are set.
   1. Run `python3 .claude/skills/pr-review/scripts/list-prs.py` to fetch currently open PRs
   2. Display the list to the user (number, title, author, branch)
   3. Ask the user which PR to review — do NOT auto-select any PR
+- Once the PR number is determined, ask the user which review mode to use with `AskUserQuestion`:
+  - **"Inline comments"** — full phase-by-phase review with per-finding inline comments
+  - **"Summary overview"** — high-level safety assessment posted as a single review comment
 
 ## Preparation
 
@@ -60,6 +63,68 @@ Glob for `*.md` files in the project root and common documentation directories (
    python3 .claude/skills/pr-review/scripts/annotate-diff.py <number>
    ```
    Read `/tmp/pr-diff-<number>.txt` into context — this is the annotated diff you will reference throughout the entire review. Line numbers shown in the annotated diff are the authoritative new-file line numbers. Use them when producing file/line references in your analysis.
+
+## Summary Flow
+
+_Follow this section only if the user selected "Summary overview". Skip to Review Phases if they selected "Inline comments"._
+
+### Analysis
+
+Read the annotated diff at `/tmp/pr-diff-<number>.txt` along with the PR metadata gathered in Setup. Answer one question: **IS IT SAFE TO MERGE THIS PR?**
+
+Focus exclusively on:
+- Critical bugs that could cause crashes, data loss, or incorrect behavior in production
+- Security vulnerabilities (injection, auth bypass, sensitive data exposure, etc.)
+- Breaking changes to APIs, interfaces, or contracts
+- Missing error handling in critical execution paths
+- Obvious logic errors or off-by-one mistakes
+- Performance issues severe enough to cause service degradation
+
+Do NOT report on: code style, naming conventions, documentation gaps, test coverage, or minor improvements.
+
+Write your assessment to `/tmp/pr-summary-<number>.txt` using this exact structure:
+
+```
+## Overall Assessment
+[SAFE TO MERGE / NEEDS ATTENTION / DO NOT MERGE]
+One-sentence verdict.
+
+## Critical Issues
+[List only blockers. If none, write "None identified."]
+
+## Notable Concerns
+[Secondary issues worth knowing but not blocking. If none, write "None."]
+
+## Summary
+2–3 sentences wrapping up your assessment.
+```
+
+Display the written assessment to the user.
+
+### Publishing
+
+Ask the user what action to take with `AskUserQuestion`:
+- **"Approve"** — post the summary and approve the PR (`APPROVE`)
+- **"Request changes"** — post the summary and request changes (`REQUEST_CHANGES`)
+- **"Post as comment"** — post the summary with no verdict (`COMMENT`)
+- **"Cancel"** — do not post anything
+
+If "Cancel": go straight to Cleanup.
+
+Otherwise run:
+```bash
+python3 .claude/skills/pr-review/scripts/post-summary.py <number> /tmp/pr-summary-<number>.txt <event>
+```
+
+### Cleanup
+
+```bash
+rm /tmp/pr-diff-<number>.txt /tmp/pr-diff-raw-<number>.txt /tmp/pr-summary-<number>.txt
+```
+
+Return to the user: summary posted, verdict applied.
+
+---
 
 ## Review Phases
 
@@ -196,4 +261,5 @@ Re-read:
 1. Project architecture/standards documentation — patterns, antipatterns
 2. The plan file — task list and expected implementation (if plan exists)
 3. `/tmp/pr-diff-<number>.txt` — the annotated diff
-4. `/tmp/pr-comments-<number>.txt` — comments written so far
+4. `/tmp/pr-comments-<number>.txt` — comments written so far (inline comments mode)
+5. `/tmp/pr-summary-<number>.txt` — summary written so far (summary mode)
